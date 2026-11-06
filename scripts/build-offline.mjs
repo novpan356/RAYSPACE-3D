@@ -1,0 +1,13 @@
+import {build} from 'vite';
+import {readFile,writeFile,mkdir,readdir} from 'node:fs/promises';
+import {resolve} from 'node:path';
+await build({configFile:false,base:'./',publicDir:false,build:{outDir:'.offline-build',emptyOutDir:true,lib:{entry:resolve('src/main.js'),name:'RaySpace',formats:['iife'],fileName:()=> 'studio.js'},cssCodeSplit:false,minify:true}});
+let script=await readFile('.offline-build/studio.js','utf8');
+const video='data:video/mp4;base64,'+(await readFile('public/reference.mp4')).toString('base64');
+const image='data:image/jpeg;base64,'+(await readFile('public/reference-poster.jpg')).toString('base64');
+if(!script.includes('./reference.mp4')||!script.includes('./reference-poster.jpg'))throw new Error('Built-in asset URLs were not bundled as expected');
+script=script.replaceAll('./reference.mp4',video).replaceAll('./reference-poster.jpg',image).replaceAll('</script','<\\/script');
+const cssFiles=(await readdir('.offline-build')).filter(s=>s.endsWith('.css'));let css='';for(const name of cssFiles)css+=await readFile('.offline-build/'+name,'utf8');
+await mkdir('downloads',{recursive:true});
+await writeFile('downloads/RAYSPACE-Studio.html',`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RAYSPACE — 离线运镜工作室</title><style>${css}</style></head><body><div id="app"></div><script>${script}</script></body></html>`);
+console.log('Offline app: downloads/RAYSPACE-Studio.html');
