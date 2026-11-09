@@ -1,6 +1,7 @@
 import {build} from 'vite';
 import {readFile,writeFile,mkdir,readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
+import {zipSync,strToU8} from 'fflate';
 await build({configFile:false,base:'./',publicDir:false,build:{outDir:'.offline-build',emptyOutDir:true,lib:{entry:resolve('src/main.js'),name:'RaySpace',formats:['iife'],fileName:()=> 'studio.js'},cssCodeSplit:false,minify:true}});
 const notices=await readFile('THIRD_PARTY_NOTICES.txt','utf8');
 let script=await readFile('.offline-build/studio.js','utf8');
@@ -8,7 +9,11 @@ const video='data:video/mp4;base64,'+(await readFile('public/reference.mp4')).to
 const image='data:image/jpeg;base64,'+(await readFile('public/reference-poster.jpg')).toString('base64');
 if(!script.includes('./reference.mp4')||!script.includes('./reference-poster.jpg'))throw new Error('Built-in asset URLs were not bundled as expected');
 script=script.replaceAll('./reference.mp4',video).replaceAll('./reference-poster.jpg',image).replaceAll('</script','<\\/script');
-const cssFiles=(await readdir('.offline-build')).filter(s=>s.endsWith('.css'));let css='';for(const name of cssFiles)css+=await readFile('.offline-build/'+name,'utf8');
+let css='';for(const name of (await readdir('.offline-build')).filter(s=>s.endsWith('.css')))css+=await readFile('.offline-build/'+name,'utf8');
 await mkdir('downloads',{recursive:true});
-await writeFile('downloads/RAYSPACE-Studio.html',`<!DOCTYPE html><!--${notices.replaceAll('--','—')}--><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RAYSPACE — 离线运镜工作室</title><style>${css}</style></head><body><div id="app"></div><script>${script}</script></body></html>`);
-console.log('Offline app: downloads/RAYSPACE-Studio.html');
+const html=`<!DOCTYPE html><!--${notices.replaceAll('--','—')}--><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RAYSPACE Studio 2 — 离线运镜工作室</title><style>${css}</style></head><body><div id="app"></div><script>${script}</script></body></html>`;
+await writeFile('downloads/RAYSPACE-Studio.html',html);
+const manual=`RAYSPACE Studio 2\n\n解压后，用新版电脑 Chrome 或 Edge 打开 RAYSPACE-Studio.html。\n\n每次导入视频会建立独立工程，并在本机识别人物、跟踪背景、估计运镜和生成机位。非人物或识别失败可在第一帧框选主体；低可信区域需要手动校正，不是任意视频的精确相机求解。\n\n工程库会保存各自的视频、模型和机位。清除浏览器数据会清除工程，请保留原素材和工程备份。\n\nG/T 切换机位或瞄准点，XYZ 约束拖动，WASD 平移，Q/E 升降，Shift 精调，Alt 快移，1/3/7 切换观察角度，F 聚焦，[ ] 切换关键帧，空格播放，Ctrl Z 撤销。\n\n默认导出真正 MP4，优先 H.264；也可选 WebM。浏览器需要支持 WebGL 和相应视频编码器。\n\n完整使用说明见 README.md。若浏览器禁止本地 HTML，请用已启用的在线网页或启动本地服务。\nhttps://novpan356.github.io/RAYSPACE-3D/\n\nHiggsfield 尚未接入自动上传或生成。\n`;
+const archive=zipSync({'RAYSPACE-Studio/RAYSPACE-Studio.html':strToU8(html),'RAYSPACE-Studio/使用说明.txt':strToU8(manual),'RAYSPACE-Studio/README.md':new Uint8Array(await readFile('README.md')),'RAYSPACE-Studio/THIRD_PARTY_NOTICES.txt':strToU8(notices),'RAYSPACE-Studio/docs/studio.png':new Uint8Array(await readFile('docs/studio.png')),'RAYSPACE-Studio/model-provenance.json':new Uint8Array(await readFile('src/models/provenance.json'))},{level:6});
+await writeFile('downloads/RAYSPACE-Studio-2.zip',archive);await writeFile('downloads/RAYSPACE-Studio-Offline.zip',archive);
+console.log(`Offline Studio 2: ${archive.length} bytes; HTML and both ZIP names refreshed.`);

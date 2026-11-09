@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {TransformControls} from 'three/addons/controls/TransformControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {sample,heroX,clamp} from './core.js';
+import {sample,heroX,clamp,sampleSubject} from './core.js';
 THREE.Object3D.DEFAULT_UP.set(0,0,1);
 const V=(a)=>new THREE.Vector3(...a);
 const mat=(c,roughness=.8)=>new THREE.MeshStandardMaterial({color:c,roughness});
@@ -19,6 +20,9 @@ export class StudioScene {
   this.environment=new THREE.Group();this.scene.add(this.environment);this.makeActor();
   this.pathGroup=new THREE.Group();this.scene.add(this.pathGroup);
   this.helper=new THREE.CameraHelper(this.camera);this.helper.material.color?.set('#e8a36b');this.scene.add(this.helper);
+  this.editProxy=new THREE.Object3D();this.scene.add(this.editProxy);this.gizmo=new TransformControls(this.director,this.renderer.domElement);this.gizmo.setMode('translate');this.gizmo.setSize(.8);this.gizmoHelper=this.gizmo.getHelper();this.scene.add(this.gizmoHelper);this.editKind='position';this.snap=.01;this.axisLock=null;this.gizmo.setTranslationSnap(this.snap);
+  this.gizmo.addEventListener('dragging-changed',e=>{this.controls.enabled=!e.value;this.gizmoDragging=e.value;if(e.value)this.callbacks.dragStart(this.selected);else this.callbacks.dragEnd();});
+  this.gizmo.addEventListener('objectChange',()=>{if(this.gizmoDragging)this.callbacks.dragMove(this.selected,this.editProxy.position.toArray(),this.editKind);});
   this.ray=new THREE.Raycaster();this.pointer=new THREE.Vector2();
   const el=this.renderer.domElement;
   el.addEventListener('pointerdown',e=>this.pointerDown(e),{capture:true});el.addEventListener('pointermove',e=>this.pointerMove(e));el.addEventListener('pointerup',e=>this.pointerUp(e));el.addEventListener('pointercancel',e=>this.pointerUp(e));
@@ -70,31 +74,40 @@ export class StudioScene {
   }
  }
  setProject(p){this.project=p;if(this.envType!==p.scene){this.envType=p.scene;this.buildEnvironment(p.scene);}this.capMaterial.color.set(p.subjectColor);this.actor.scale.setScalar(p.subjectScale);this.setAspect(p.aspect);this.rebuildPath();}
- setAspect(aspect){const [w,h]=aspect.split(':').map(Number);this.camera.aspect=w/h;this.camera.updateProjectionMatrix();const height=720;this.previewRenderer.setSize(Math.round(height*w/h),height,false);this.preview.style.aspectRatio=`${w}/${h}`;}
+ setAspect(aspect){if(this.currentAspect===aspect)return;this.currentAspect=aspect;const [w,h]=aspect.split(':').map(Number);this.camera.aspect=w/h;this.camera.updateProjectionMatrix();const height=720;this.previewRenderer.setSize(Math.round(height*w/h),height,false);this.preview.style.aspectRatio=`${w}/${h}`;}
  rebuildPath(){
-  for(const o of [...this.pathGroup.children]){this.pathGroup.remove(o);o.geometry?.dispose();o.material?.dispose();}
   const points=[];for(let t=0;t<=this.project.duration;t+=.06)points.push(V(sample(this.project,t).position));points.push(V(sample(this.project,this.project.duration).position));
-  const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:'#e9a46d',transparent:true,opacity:.8}));this.pathGroup.add(line);this.dots=[];
-  for(const k of this.project.keyframes){const dot=new THREE.Mesh(new THREE.SphereGeometry(.135,12,10),new THREE.MeshBasicMaterial({color:k.id===this.selected?'#ffdeab':'#e6a36e',depthTest:false}));dot.position.fromArray(k.position);dot.userData.id=k.id;dot.renderOrder=4;this.pathGroup.add(dot);this.dots.push(dot);}
+  if(!this.pathLine){this.pathLine=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:'#e9a46d',transparent:true,opacity:.8}));this.pathGroup.add(this.pathLine);}
+  const values=new Float32Array(points.length*3);points.forEach((p,i)=>p.toArray(values,i*3));const attribute=this.pathLine.geometry.getAttribute('position');
+  if(attribute?.count===points.length){attribute.array.set(values);attribute.needsUpdate=true;this.pathLine.geometry.computeBoundingSphere();}else{this.pathLine.geometry.dispose();this.pathLine.geometry=new THREE.BufferGeometry();this.pathLine.geometry.setAttribute('position',new THREE.BufferAttribute(values,3));}
+  const old=new Map((this.dots||[]).map(d=>[d.userData.id,d]));this.dots=[];
+  for(const k of this.project.keyframes){let dot=old.get(k.id);if(dot)old.delete(k.id);else{dot=new THREE.Mesh(new THREE.SphereGeometry(.135,12,10),new THREE.MeshBasicMaterial({color:'#df9c66',depthTest:false}));dot.userData.id=k.id;dot.renderOrder=4;this.pathGroup.add(dot);}dot.position.fromArray(k.position);this.dots.push(dot);}
+  for(const dot of old.values()){this.pathGroup.remove(dot);dot.geometry.dispose();dot.material.dispose();}
   this.setSelected(this.selected);
  }
- setSelected(id){this.selected=id;for(const d of this.dots||[]){const yes=d.userData.id===id;d.material.color.set(yes?'#fff0cd':'#df9c66');d.scale.setScalar(yes?1.65:1);}}
+ setSelected(id){this.selected=id;const k=this.project?.keyframes.find(k=>k.id===id);if(k&&!this.gizmoDragging&&!this.drag){this.editProxy.position.fromArray(k[this.editKind]);this.gizmo.attach(this.editProxy);} for(const d of this.dots||[]){const yes=d.userData.id===id;d.material.color.set(yes?'#fff0cd':'#df9c66');d.scale.setScalar(yes?1.65:1);}}
  resize(){const r=this.host.getBoundingClientRect();if(!r.width||!r.height)return;this.renderer.setSize(r.width,r.height);this.director.aspect=r.width/r.height;this.director.updateProjectionMatrix();}
- update(t){
-  this.time=t;const p=this.project,k=sample(p,t);this.camera.position.fromArray(k.position);this.camera.up.set(0,0,1);this.camera.setFocalLength(k.lens);this.camera.lookAt(V(k.target));this.camera.updateMatrixWorld();
-  const motionT=t*15.2/p.duration;this.actor.position.x=p.subjectMotion?heroX(motionT):0;for(let i=0;i<2;i++){const step=p.subjectMotion&&(motionT<6||motionT>11)?Math.sin(motionT*6+i*Math.PI)*.16:0;this.legs[i].position.x=step*.5;this.shoes[i].position.x=.055+step;this.shoes[i].position.z=.08+Math.max(0,step)*.3;}
+ update(t,exportOnly=false){
+  this.time=t;const p=this.project,k=sample(p,t);this.camera.position.fromArray(k.position);this.camera.up.set(0,0,1);this.camera.setFocalLength(k.lens);this.camera.lookAt(V(k.target));this.camera.rotateZ(THREE.MathUtils.degToRad(k.roll||0));this.camera.updateMatrixWorld();
+  const motionT=t*15.2/p.duration;this.actor.position.fromArray(sampleSubject(p,t));for(let i=0;i<2;i++){const step=p.subjectMotion&&(motionT<6||motionT>11)?Math.sin(motionT*6+i*Math.PI)*.16:0;this.legs[i].position.x=step*.5;this.shoes[i].position.x=.055+step;this.shoes[i].position.z=.08+Math.max(0,step)*.3;}
   this.phoneArm.position.z=clamp((motionT-6.1)/.9,0,1)*clamp((8.8-motionT)/.7,0,1)*.4;
   for(const car of this.cars)car.g.position.y=car.y+motionT*(car.x<0?2.2:-2.4);
+  if(exportOnly&&this.exportRenderer){this.pathGroup.visible=false;this.helper.visible=false;this.gizmoHelper.visible=false;this.exportRenderer.render(this.scene,this.camera);return;}
   this.controls.update();this.helper.update();
-  this.pathGroup.visible=this.showPath&&this.mode==='director';this.helper.visible=this.pathGroup.visible;
+  this.pathGroup.visible=this.showPath&&this.mode==='director';this.helper.visible=this.pathGroup.visible;this.gizmoHelper.visible=this.mode==='director'&&!this.locked;this.gizmo.enabled=this.gizmoHelper.visible;
   const size=this.renderer.getSize(new THREE.Vector2());this.renderer.setScissorTest(false);this.renderer.setViewport(0,0,size.x,size.y);this.renderer.clear();
   if(this.mode!=='director'){const width=Math.min(size.x,size.y*this.camera.aspect),height=width/this.camera.aspect,x=(size.x-width)/2,y=(size.y-height)/2;this.renderer.setViewport(x,y,width,height);this.renderer.setScissor(x,y,width,height);this.renderer.setScissorTest(true);}
   this.renderer.render(this.scene,this.mode==='director'?this.director:this.camera);this.renderer.setScissorTest(false);
-  this.pathGroup.visible=false;this.helper.visible=false;this.previewRenderer.render(this.scene,this.camera);if(this.exportRenderer)this.exportRenderer.render(this.scene,this.camera);
+  this.pathGroup.visible=false;this.helper.visible=false;this.gizmoHelper.visible=false;this.previewRenderer.render(this.scene,this.camera);if(this.exportRenderer)this.exportRenderer.render(this.scene,this.camera);this.gizmoHelper.visible=this.mode==='director'&&!this.locked;
  }
- pointerDown(e){if(e.button!==0||this.mode!=='director'||!this.showPath||this.locked)return;const rect=this.host.getBoundingClientRect();this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);this.ray.setFromCamera(this.pointer,this.director);const hit=this.ray.intersectObjects(this.dots)[0];if(!hit)return;e.stopImmediatePropagation();e.preventDefault();this.drag={id:hit.object.userData.id,plane:new THREE.Plane(new THREE.Vector3(0,0,1),-hit.object.position.z)};this.controls.enabled=false;this.renderer.domElement.setPointerCapture(e.pointerId);this.callbacks.dragStart(this.drag.id);}
- pointerMove(e){if(!this.drag)return;const r=this.host.getBoundingClientRect();this.pointer.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);this.ray.setFromCamera(this.pointer,this.director);const point=new THREE.Vector3();if(this.ray.ray.intersectPlane(this.drag.plane,point))this.callbacks.dragMove(this.drag.id,[point.x,point.y,point.z]);}
- pointerUp(){if(!this.drag)return;this.drag=null;this.controls.enabled=true;this.callbacks.dragEnd();}
+ setEditTool(kind){this.editKind=kind;this.setSelected(this.selected);}
+ setAxis(axis){this.axisLock=axis;this.gizmo.showX=!axis||axis==='X';this.gizmo.showY=!axis||axis==='Y';this.gizmo.showZ=!axis||axis==='Z';}
+ setSnap(value){this.snap=value;this.gizmo.setTranslationSnap(value||null);}
+ focusSelected(){const k=this.project.keyframes.find(k=>k.id===this.selected);if(!k)return;this.controls.target.fromArray(k[this.editKind]);const offset=new THREE.Vector3(4,-5,3);this.director.position.copy(this.controls.target).add(offset);this.controls.update();}
+ setViewpoint(which){const target=this.controls.target.clone();const d=Math.max(8,this.director.position.distanceTo(target));const delta=which==='top'?new THREE.Vector3(0,-.0001,d):which==='front'?new THREE.Vector3(0,-d,.001):new THREE.Vector3(d,0,.001);this.director.position.copy(target).add(delta);this.controls.update();}
+ pointerDown(e){if(e.button!==0||this.mode!=='director'||!this.showPath||this.locked||this.gizmo.axis)return;const rect=this.host.getBoundingClientRect();this.pointer.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);this.ray.setFromCamera(this.pointer,this.director);const hit=this.ray.intersectObjects(this.dots)[0];if(!hit)return;e.stopImmediatePropagation();e.preventDefault();const id=hit.object.userData.id;this.callbacks.dragStart(id);const k=this.project.keyframes.find(k=>k.id===id),start=V(k[this.editKind]);let normal=new THREE.Vector3(0,0,1);if(this.axisLock==='Z'){normal.copy(this.director.position).sub(start);normal.z=0;normal.normalize();}const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(normal,start),point=new THREE.Vector3();if(!this.ray.ray.intersectPlane(plane,point))return;this.drag={id,plane,start,origin:point};this.controls.enabled=false;this.gizmo.enabled=false;this.renderer.domElement.setPointerCapture(e.pointerId);}
+ pointerMove(e){if(!this.drag)return;const r=this.host.getBoundingClientRect();this.pointer.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);this.ray.setFromCamera(this.pointer,this.director);const point=new THREE.Vector3();if(this.ray.ray.intersectPlane(this.drag.plane,point)){const delta=point.sub(this.drag.origin);if(this.axisLock)for(const a of ['x','y','z'])if(a!==this.axisLock.toLowerCase())delta[a]=0;const pos=this.drag.start.clone().add(delta),step=e.shiftKey?.001:this.snap;if(step)for(const a of ['x','y','z'])pos[a]=Math.round(pos[a]/step)*step;this.editProxy.position.copy(pos);this.callbacks.dragMove(this.drag.id,pos.toArray(),this.editKind);}}
+ pointerUp(){if(!this.drag)return;this.drag=null;this.controls.enabled=true;this.gizmo.enabled=true;this.setSelected(this.selected);this.callbacks.dragEnd();}
  async importGLB(file){
   if(file.size>100*1024*1024)throw new Error('请使用小于 100 MB 的单文件 GLB 模型');
   const manager=new THREE.LoadingManager();manager.setURLModifier(url=>{if(!url.startsWith('blob:')&&!url.startsWith('data:'))throw new Error('请导入将贴图嵌入文件的单文件 GLB，暂不支持外部资源');return url;});const gltf=await new GLTFLoader(manager).parseAsync(await file.arrayBuffer(),'');const obj=gltf.scene;obj.rotation.x=Math.PI/2;obj.updateMatrixWorld(true);
@@ -103,7 +116,7 @@ export class StudioScene {
   this.clearCustom();this.customActor=new THREE.Group();this.customActor.add(obj);this.actor.add(this.customActor);this.defaultActor.visible=false;
  }
  clearCustom(){if(this.customActor){this.actor.remove(this.customActor);this.customActor.traverse(o=>{o.geometry?.dispose();if(o.material){for(const m of [].concat(o.material)){for(const val of Object.values(m))if(val?.isTexture)val.dispose();m.dispose();}}});this.customActor=null;}this.defaultActor.visible=true;}
- startExport(){const [w,h]=this.project.aspect.split(':').map(Number);this.exportRenderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});this.exportRenderer.setSize(Math.round(720*w/h),720);this.exportRenderer.shadowMap.enabled=true;this.exportRenderer.outputColorSpace=THREE.SRGBColorSpace;return this.exportRenderer.domElement;}
+ startExport(){const [w,h]=this.project.aspect.split(':').map(Number);this.exportRenderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});this.exportRenderer.setSize(Math.round(720*w/h/2)*2,720);this.exportRenderer.shadowMap.enabled=true;this.exportRenderer.outputColorSpace=THREE.SRGBColorSpace;return this.exportRenderer.domElement;}
  stopExport(){this.exportRenderer?.dispose();this.exportRenderer=null;}
  screenshot(){return this.previewRenderer.domElement.toDataURL('image/png');}
 }
