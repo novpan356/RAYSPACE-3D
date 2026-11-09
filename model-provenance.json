@@ -1,0 +1,14 @@
+{
+  "model": "MoveNet Lightning",
+  "original_model": "Google MoveNet SinglePose Lightning",
+  "source": "https://github.com/vladmandic/human/tree/main/models",
+  "downloaded": "2026-11-09",
+  "sha256": {
+    "movenet-lightning.bin": "bf97bc10d9c8a11200b0190ed64ce039b6252f1aff7cb552aca99b3d191c2f34",
+    "movenet-lightning.json": "df8cbde44d00f533ccc4916a7c6ebc17316532fb3fadad114ec667fef22872e9"
+  },
+  "files": {
+    "movenet-lightning.bin": "https://raw.githubusercontent.com/vladmandic/human/main/models/movenet-lightning.bin",
+    "movenet-lightning.json": "https://raw.githubusercontent.com/vladmandic/human/main/models/movenet-lightning.json"
+  }
+}
